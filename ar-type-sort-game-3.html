@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>AR Type Sort — จับคู่ชนิดข้อมูลภาษา C</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/3.4.1/tailwind.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B1220;
+    --bg2:#0E1729;
+    --panel:rgba(255,255,255,0.06);
+    --panel-border:rgba(255,255,255,0.12);
+    --cyan:#22D3EE;
+    --amber:#FBBF24;
+    --green:#34D399;
+    --rose:#FB7185;
+    --ink:#E7ECF5;
+    --ink-dim:#8996AD;
+  }
+  html,body{
+    margin:0; padding:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:'Space Grotesk',system-ui,sans-serif; overflow:hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .font-mono{ font-family:'JetBrains Mono',monospace; }
+  #stage{ position:fixed; inset:0; }
+  #cameraFeed{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:cover; transform:scaleX(-1);
+    filter:brightness(0.55) saturate(1.1);
+  }
+  #fallbackBg{
+    position:absolute; inset:0;
+    background:
+      radial-gradient(ellipse at 20% 20%, rgba(34,211,238,0.10), transparent 55%),
+      radial-gradient(ellipse at 80% 75%, rgba(251,191,36,0.08), transparent 55%),
+      linear-gradient(160deg, var(--bg) 0%, var(--bg2) 100%);
+  }
+  #handCanvas{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  #gameCanvas{ position:absolute; inset:0; width:100%; height:100%; }
+
+  .glass{
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+  }
+  .glass-strong{
+    background:rgba(14,23,41,0.72);
+    border:1px solid rgba(255,255,255,0.14);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+  }
+  .btn-primary{
+    background:linear-gradient(135deg,#22D3EE,#0EA5B7);
+    color:#04222A; font-weight:700;
+    box-shadow:0 8px 30px -8px rgba(34,211,238,0.6);
+    transition:transform .15s ease, box-shadow .15s ease;
+  }
+  .btn-primary:hover{ transform:translateY(-2px); box-shadow:0 12px 34px -6px rgba(34,211,238,0.75); }
+  .btn-primary:active{ transform:translateY(0); }
+  .btn-ghost{
+    background:rgba(255,255,255,0.05);
+    border:1px solid rgba(255,255,255,0.18);
+    color:var(--ink);
+    transition:background .15s ease;
+  }
+  .btn-ghost:hover{ background:rgba(255,255,255,0.1); }
+
+  .screen{
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    z-index:50; padding:20px;
+  }
+  .hidden{ display:none !important; }
+
+  ::selection{ background:rgba(34,211,238,0.35); }
+
+  .pulse-dot{
+    box-shadow:0 0 0 0 rgba(52,211,153,0.6);
+    animation:pulse 1.8s infinite;
+  }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(52,211,153,0.55); }
+    70%{ box-shadow:0 0 0 10px rgba(52,211,153,0); }
+    100%{ box-shadow:0 0 0 0 rgba(52,211,153,0); }
+  }
+
+  .scan-line{
+    position:absolute; left:0; right:0; height:2px;
+    background:linear-gradient(90deg, transparent, rgba(34,211,238,0.7), transparent);
+    animation:scan 3.2s linear infinite;
+  }
+  @keyframes scan{
+    0%{ top:0%; opacity:0; }
+    10%{ opacity:1; }
+    90%{ opacity:1; }
+    100%{ top:100%; opacity:0; }
+  }
+
+  #toast{
+    position:fixed; top:18px; left:50%; transform:translateX(-50%) translateY(-140%);
+    z-index:70; transition:transform .35s cubic-bezier(.2,.9,.3,1.3);
+    pointer-events:none;
+  }
+  #toast.show{ transform:translateX(-50%) translateY(0); }
+
+  .cursor-glow{
+    position:absolute; width:0; height:0; pointer-events:none; z-index:40;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  #introBackdrop{
+    background:
+      radial-gradient(ellipse at 15% 10%, rgba(34,211,238,0.14), transparent 50%),
+      radial-gradient(ellipse at 85% 90%, rgba(251,191,36,0.10), transparent 50%),
+      linear-gradient(160deg, #0B1220 0%, #0E1729 100%);
+  }
+
+  .kbd{
+    font-family:'JetBrains Mono',monospace; font-size:11px;
+    padding:2px 7px; border-radius:5px;
+    background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.16);
+  }
+
+  #camPermHint{ transition: opacity .3s ease; }
+
+  .fade-in{ animation:fadeIn .5s ease both; }
+  @keyframes fadeIn{ from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
+
+  #endBadge{
+    animation:popIn .55s cubic-bezier(.2,1.4,.4,1) both;
+  }
+  @keyframes popIn{
+    0%{ transform:scale(.4) rotate(-8deg); opacity:0; }
+    70%{ transform:scale(1.08) rotate(2deg); opacity:1; }
+    100%{ transform:scale(1) rotate(0); }
+  }
+
+  #hintBanner{ transition: opacity .4s ease; }
+</style>
+</head>
+<body>
+
+<!-- ============ STAGE ============ -->
+<div id="stage">
+  <div id="fallbackBg"></div>
+  <video id="cameraFeed" autoplay playsinline muted class="hidden"></video>
+  <canvas id="handCanvas"></canvas>
+  <canvas id="gameCanvas"></canvas>
+</div>
+
+<!-- ============ TOAST ============ -->
+<div id="toast">
+  <div class="glass-strong rounded-2xl px-5 py-3 flex items-center gap-3 shadow-2xl">
+    <span id="toastIcon" class="text-2xl"></span>
+    <span id="toastText" class="font-semibold text-sm sm:text-base"></span>
+  </div>
+</div>
+
+<!-- ============ START SCREEN ============ -->
+<div id="screenStart" class="screen">
+  <div id="introBackdrop" class="absolute inset-0 -z-10"></div>
+  <div class="glass-strong rounded-3xl w-full max-w-md p-8 sm:p-10 text-center fade-in">
+    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full glass mb-6 text-xs font-mono text-[var(--cyan)]">
+      <span class="w-1.5 h-1.5 rounded-full bg-[var(--cyan)] pulse-dot"></span>
+      วิชาวิทยาการคำนวณ
+    </div>
+    <h1 class="text-3xl sm:text-4xl font-bold leading-tight mb-2">AR Type&nbsp;Sort</h1>
+    <p class="text-[var(--ink-dim)] text-sm sm:text-base mb-8 leading-relaxed">
+      ใช้มือหยิบค่าที่ลอยอยู่ แล้ววางลงในหมวดชนิดข้อมูล<br class="hidden sm:block">ของภาษา C ให้ถูกต้อง ผ่านกล้องเว็บแคมของคุณ
+    </p>
+    <button id="btnEnter" class="btn-primary w-full py-4 rounded-2xl text-lg">
+      เข้าสู่เกม (Start)
+    </button>
+    <p class="text-[11px] text-[var(--ink-dim)] mt-4 font-mono">ต้องใช้กล้องเว็บแคมในการเล่น — เตรียมอนุญาตสิทธิ์กล้องไว้ด้วยนะ</p>
+  </div>
+</div>
+
+<!-- ============ INSTRUCTIONS SCREEN (overlays canvas, camera live behind) ============ -->
+<div id="screenInstructions" class="screen hidden">
+  <div class="glass-strong rounded-3xl w-full max-w-lg p-7 sm:p-9 fade-in max-h-[92vh] overflow-y-auto">
+    <h2 class="text-2xl font-bold mb-1">วิธีเล่น</h2>
+    <p class="text-[var(--ink-dim)] text-sm mb-6">Data Type Sorting — จับคู่ค่ากับชนิดข้อมูลใน C</p>
+
+    <div class="space-y-4 mb-7">
+      <div class="flex gap-3 items-start">
+        <div class="w-9 h-9 rounded-xl glass flex items-center justify-center shrink-0 text-lg">👆</div>
+        <div>
+          <p class="font-semibold text-sm">ชี้นิ้วชี้ไปที่ไอเทม</p>
+          <p class="text-[var(--ink-dim)] text-xs leading-relaxed">เคอร์เซอร์สีฟ้าจะติดตามปลายนิ้วชี้ของคุณ</p>
+        </div>
+      </div>
+      <div class="flex gap-3 items-start">
+        <div class="w-9 h-9 rounded-xl glass flex items-center justify-center shrink-0 text-lg">🤏</div>
+        <div>
+          <p class="font-semibold text-sm">จีบนิ้วโป้ง + นิ้วชี้ เพื่อ "หยิบ"</p>
+          <p class="text-[var(--ink-dim)] text-xs leading-relaxed">เคอร์เซอร์จะเปลี่ยนเป็นสีเหลืองเมื่อจับได้</p>
+        </div>
+      </div>
+      <div class="flex gap-3 items-start">
+        <div class="w-9 h-9 rounded-xl glass flex items-center justify-center shrink-0 text-lg">🖐️</div>
+        <div>
+          <p class="font-semibold text-sm">กางนิ้วเพื่อ "ปล่อย" ลงในช่องหมวดหมู่</p>
+          <p class="text-[var(--ink-dim)] text-xs leading-relaxed">วางให้ตรงหมวดชนิดข้อมูลที่ถูกต้อง ครบ 10 ข้อจบเกม</p>
+        </div>
+      </div>
+      <div class="flex gap-3 items-start">
+        <div class="w-9 h-9 rounded-xl glass flex items-center justify-center shrink-0 text-lg">📷</div>
+        <div>
+          <p class="font-semibold text-sm">ต้องเปิดกล้องก่อนถึงจะเล่นได้</p>
+          <p class="text-[var(--ink-dim)] text-xs leading-relaxed">ปุ่ม "เริ่มเกม!" จะกดได้เมื่อระบบตรวจพบมือของคุณผ่านกล้องแล้วเท่านั้น</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="camStatusRow" class="flex items-center gap-2 mb-3 text-xs font-mono">
+      <span id="camStatusDot" class="w-2 h-2 rounded-full bg-[var(--ink-dim)]"></span>
+      <span id="camStatusText" class="text-[var(--ink-dim)]">กำลังตรวจสอบกล้อง...</span>
+    </div>
+
+    <div id="camErrorBox" class="hidden mb-4 p-3 rounded-xl text-xs leading-relaxed" style="background:rgba(251,113,133,0.1); border:1px solid rgba(251,113,133,0.3);">
+      <p class="text-[var(--rose)] font-semibold mb-1">เปิดกล้องไม่ได้</p>
+      <p class="text-[var(--ink-dim)]" id="camErrorDetail">เกมนี้ต้องเปิดผ่าน http:// หรือ https:// เท่านั้น — การดับเบิลคลิกเปิดไฟล์โดยตรง (file://) เบราว์เซอร์จะบล็อกกล้องเสมอ</p>
+      <p class="text-[var(--ink-dim)] mt-2">วิธีแก้: เปิด Terminal ในโฟลเดอร์ไฟล์นี้ แล้วรัน <span class="kbd">python3 -m http.server 8000</span> จากนั้นเปิด <span class="kbd">http://localhost:8000</span> ในเบราว์เซอร์</p>
+    </div>
+
+    <button id="btnRetryCam" class="btn-ghost w-full py-3 rounded-2xl text-sm mb-3 hidden">
+      🔄 ลองเชื่อมกล้องอีกครั้ง
+    </button>
+
+    <button id="btnStartGame" disabled class="w-full py-4 rounded-2xl text-lg opacity-40 cursor-not-allowed transition-opacity" style="background:rgba(255,255,255,0.08); color:var(--ink-dim);">
+      รอกล้องพร้อม...
+    </button>
+  </div>
+</div>
+
+<!-- ============ HUD (during play) ============ -->
+<div id="hud" class="hidden fixed inset-0 z-30 pointer-events-none">
+  <!-- top left: progress -->
+  <div class="absolute top-4 left-4 glass rounded-2xl px-4 py-2.5 flex items-center gap-3 pointer-events-auto">
+    <div class="text-xs font-mono text-[var(--ink-dim)]">ข้อ</div>
+    <div class="text-lg font-bold font-mono"><span id="hudProgress">1</span>/10</div>
+  </div>
+
+  <!-- top center: current prompt -->
+  <div id="promptBar" class="absolute top-4 left-1/2 -translate-x-1/2 glass-strong rounded-2xl px-5 py-2.5 max-w-[88vw] sm:max-w-md text-center">
+    <div class="text-[10px] uppercase tracking-wider text-[var(--cyan)] font-mono mb-0.5">ลากไปวางในหมวด</div>
+    <div id="promptText" class="text-sm sm:text-base font-semibold leading-snug"></div>
+  </div>
+
+  <!-- top right: score + mode -->
+  <div class="absolute top-4 right-4 flex flex-col items-end gap-2 pointer-events-auto">
+    <div class="glass rounded-2xl px-4 py-2.5 flex items-center gap-2">
+      <span class="text-xs font-mono text-[var(--ink-dim)]">คะแนน</span>
+      <span id="hudScore" class="text-lg font-bold font-mono text-[var(--green)]">0</span>
+    </div>
+    <div id="modeBadge" class="text-[10px] font-mono px-2.5 py-1 rounded-full glass text-[var(--green)]">AR HAND MODE</div>
+  </div>
+
+  <!-- hint banner -->
+  <div id="hintBanner" class="absolute bottom-[172px] sm:bottom-[190px] left-1/2 -translate-x-1/2 glass rounded-full px-4 py-1.5 text-[11px] sm:text-xs font-mono text-[var(--ink-dim)] whitespace-nowrap">
+    🤏 จีบนิ้วเพื่อหยิบ · กางนิ้วเพื่อวาง
+  </div>
+</div>
+
+<!-- ============ END SCREEN ============ -->
+<div id="screenEnd" class="screen hidden">
+  <div class="glass-strong rounded-3xl w-full max-w-md p-8 sm:p-10 text-center fade-in">
+    <div id="endBadge" class="w-20 h-20 mx-auto rounded-full flex items-center justify-center text-4xl mb-5"
+         style="background:linear-gradient(135deg, rgba(52,211,153,0.25), rgba(34,211,238,0.15)); border:1px solid rgba(52,211,153,0.4);">
+      🏆
+    </div>
+    <h2 class="text-2xl sm:text-3xl font-bold mb-1">เก่งมาก!</h2>
+    <p class="text-[var(--ink-dim)] text-sm mb-7">คุณจัดเรียงชนิดข้อมูลครบทั้ง 10 ข้อแล้ว</p>
+
+    <div class="grid grid-cols-2 gap-3 mb-8">
+      <div class="glass rounded-2xl py-4">
+        <div class="text-2xl font-bold font-mono text-[var(--green)]" id="endScore">0</div>
+        <div class="text-[11px] text-[var(--ink-dim)] font-mono mt-1">คะแนนรวม</div>
+      </div>
+      <div class="glass rounded-2xl py-4">
+        <div class="text-2xl font-bold font-mono text-[var(--cyan)]" id="endAccuracy">0%</div>
+        <div class="text-[11px] text-[var(--ink-dim)] font-mono mt-1">ความแม่นยำ</div>
+      </div>
+    </div>
+
+    <button id="btnReplay" class="btn-primary w-full py-4 rounded-2xl text-lg mb-3">เล่นอีกครั้ง</button>
+    <button id="btnHome" class="btn-ghost w-full py-3 rounded-2xl text-sm">กลับหน้าแรก</button>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   AR TYPE SORT — จับคู่ค่า/โจทย์บรรยาย กับชนิดข้อมูลภาษา C
+   Single-file game. MediaPipe Hands for pinch-drag, mouse/touch fallback.
+   ========================================================================= */
+
+/* ---------------- DATA: 10 rounds, categories, items ---------------- */
+// Categories = drop bins. Keep to a workable set so bins fit on screen;
+// items are drawn from a wider pool covering all of them (>=1 item per category).
+const CATEGORIES = [
+  { id:'int',    label:'int',    sub:'จำนวนเต็ม',        color:'#22D3EE' },
+  { id:'float',  label:'float',  sub:'ทศนิยม',           color:'#FBBF24' },
+  { id:'char',   label:'char',   sub:'อักขระ 1 ตัว',     color:'#34D399' },
+  { id:'string', label:'string', sub:'ข้อความ (char[])', color:'#FB7185' },
+  { id:'bool',   label:'bool',   sub:'จริง/เท็จ',        color:'#A78BFA' },
+];
+
+// Pool of 10 rounds — mixed: literal C code values + plain-language prompts.
+const ROUND_POOL = [
+  { display: '1',            mono:true,  correct:'int' },
+  { display: "'A'",          mono:true,  correct:'char' },
+  { display: '"Apple"',      mono:true,  correct:'string' },
+  { display: '3.14',         mono:true,  correct:'float' },
+  { display: 'true',         mono:true,  correct:'bool' },
+  { display: 'อายุของคน (เช่น 15 ปี)',        mono:false, correct:'int' },
+  { display: 'เกรดวิชา (A, B, C, D, F)',       mono:false, correct:'char' },
+  { display: 'ชื่อ-นามสกุลนักเรียน',           mono:false, correct:'string' },
+  { display: 'ส่วนสูง 168.50 ซม.',            mono:false, correct:'float' },
+  { display: 'สถานะ "มาเรียนวันนี้หรือไม่"',   mono:false, correct:'bool' },
+  { display: '0',             mono:true,  correct:'int' },
+  { display: "'x'",           mono:true,  correct:'char' },
+  { display: '"Bangkok"',     mono:true,  correct:'string' },
+  { display: '99.9',          mono:true,  correct:'float' },
+  { display: 'false',         mono:true,  correct:'bool' },
+  { display: 'จำนวนนักเรียนในห้อง',           mono:false, correct:'int' },
+  { display: 'ตัวอักษรตัวแรกของชื่อ',          mono:false, correct:'char' },
+  { display: 'ที่อยู่บ้านเลขที่ ถนน ตำบล',      mono:false, correct:'string' },
+  { display: 'อุณหภูมิ 36.6 องศา',            mono:false, correct:'float' },
+  { display: 'ไฟเขียว = เดินได้ (ใช่/ไม่ใช่)', mono:false, correct:'bool' },
+];
+
+function shuffle(arr){
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [a[i],a[j]] = [a[j],a[i]];
+  }
+  return a;
+}
+
+let rounds = [];       // the 10 chosen for this playthrough
+let roundIndex = 0;
+let score = 0;
+let correctCount = 0;
+let wrongAttempts = 0;
+
+/* ---------------- Canvas + layout ---------------- */
+const gameCanvas = document.getElementById('gameCanvas');
+const gctx = gameCanvas.getContext('2d');
+const handCanvas = document.getElementById('handCanvas');
+const hctx = handCanvas.getContext('2d');
+
+function resizeCanvases(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  [gameCanvas, handCanvas].forEach(c=>{
+    c.width = innerWidth * dpr;
+    c.height = innerHeight * dpr;
+    c.style.width = innerWidth + 'px';
+    c.style.height = innerHeight + 'px';
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  });
+  layoutBins();
+}
+window.addEventListener('resize', resizeCanvases);
+
+/* ---------------- Bins (drop zones) ---------------- */
+let bins = [];
+function layoutBins(){
+  const W = innerWidth, H = innerHeight;
+  const isNarrow = W < 640;
+  const cols = isNarrow ? Math.min(3, CATEGORIES.length) : CATEGORIES.length;
+  const rowsNeeded = Math.ceil(CATEGORIES.length / cols);
+  const margin = isNarrow ? 10 : 24;
+  const gap = isNarrow ? 8 : 14;
+  const trayH = isNarrow ? (rowsNeeded===2 ? 128 : 78) : 96;
+  const binW = (W - margin*2 - gap*(cols-1)) / cols;
+  const binH = rowsNeeded===2 ? (trayH-gap)/2 : trayH;
+
+  bins = CATEGORIES.map((cat, i)=>{
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = margin + col*(binW+gap);
+    const y = H - trayH - (isNarrow?10:22) + row*(binH+gap);
+    return { ...cat, x, y, w:binW, h:binH, flashUntil:0, flashColor:null };
+  });
+}
+
+/* ---------------- Floating item (the draggable chip) ---------------- */
+let item = null; // { data, x, y, vx, vy, w, h, dragging, angle }
+
+function spawnItem(){
+  const data = rounds[roundIndex];
+  const W = innerWidth, H = innerHeight;
+  const isMono = data.mono;
+  gctx.font = `${isMono?600:600} ${isMono?22:16}px ${isMono?"'JetBrains Mono'":"'Space Grotesk'"}`;
+  const textW = gctx.measureText(data.display).width;
+  const padX = 28, padY = 20;
+  const w = Math.min(Math.max(textW + padX*2, 120), W*0.82);
+  const h = 58;
+
+  item = {
+    data, x: W/2, y: Math.max(150, H*0.32),
+    vx: (Math.random()-0.5)*10, vy: -8 - Math.random()*6,
+    w, h, dragging:false, angle:0, floatSeed: Math.random()*1000,
+    grabDX:0, grabDY:0
+  };
+}
+
+function updatePrompt(){
+  const cat = CATEGORIES.find(c=>c.id===rounds[roundIndex].correct);
+  document.getElementById('promptText').textContent =
+    `วางลงในหมวด "${cat.label}" — ${cat.sub}`;
+  document.getElementById('hudProgress').textContent = roundIndex+1;
+}
+
+/* ---------------- Pointer state (hand only — mouse/touch removed) ---------------- */
+const pointer = { x: innerWidth/2, y: innerHeight/2, active:false, pinching:false, prevPinching:false, source:'hand' };
+let usingHandTracking = false;
+
+/* ---------------- Toast ---------------- */
+let toastTimer=null;
+function showToast(icon, text, tone){
+  const el = document.getElementById('toast');
+  document.getElementById('toastIcon').textContent = icon;
+  const txt = document.getElementById('toastText');
+  txt.textContent = text;
+  txt.style.color = tone==='good' ? 'var(--green)' : tone==='bad' ? 'var(--rose)' : 'var(--ink)';
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=> el.classList.remove('show'), 1400);
+}
+
+/* ---------------- Game loop ---------------- */
+let lastTime = performance.now();
+let particles = [];
+
+function spawnParticles(x,y,color,n=18){
+  for(let i=0;i<n;i++){
+    const a = Math.random()*Math.PI*2;
+    const sp = 2+Math.random()*5;
+    particles.push({
+      x,y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp - 2,
+      life:1, color, size: 3+Math.random()*3
+    });
+  }
+}
+
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+function drawBins(){
+  const now = performance.now();
+  bins.forEach(b=>{
+    const flashing = now < b.flashUntil;
+    gctx.save();
+    roundRect(gctx, b.x, b.y, b.w, b.h, 16);
+    gctx.fillStyle = flashing ? hexAlpha(b.flashColor, 0.35) : 'rgba(255,255,255,0.055)';
+    gctx.fill();
+    gctx.lineWidth = flashing ? 3 : 1.5;
+    gctx.strokeStyle = flashing ? b.flashColor : hexAlpha(b.color, 0.55);
+    gctx.stroke();
+    gctx.restore();
+
+    const cx = b.x + b.w/2, cy = b.y + b.h/2;
+    gctx.textAlign='center'; gctx.textBaseline='middle';
+    gctx.fillStyle = b.color;
+    gctx.font = "700 " + (b.h<70? "16px":"19px") + " 'JetBrains Mono'";
+    gctx.fillText(b.label, cx, cy - (b.h<70?7:9));
+    gctx.fillStyle = 'rgba(231,236,245,0.65)';
+    gctx.font = (b.h<70? "9px":"10.5px") + " 'Space Grotesk'";
+    gctx.fillText(b.sub, cx, cy + (b.h<70?9:12));
+  });
+}
+
+function hexAlpha(hex, a){
+  const h = hex.replace('#','');
+  const r = parseInt(h.substring(0,2),16), g=parseInt(h.substring(2,4),16), bl=parseInt(h.substring(4,6),16);
+  return `rgba(${r},${g},${bl},${a})`;
+}
+
+function drawItem(dt){
+  if(!item) return;
+  const isMono = item.data.mono;
+
+  if(!item.dragging){
+    // gentle floaty physics settle to a hover point
+    item.vy += 0.15; // gravity-ish pull back toward float band
+    const floatY = Math.max(150, innerHeight*0.32) + Math.sin((performance.now()/650)+item.floatSeed)*10;
+    item.vy += (floatY - item.y) * 0.004;
+    item.vx *= 0.94; item.vy *= 0.94;
+    item.x += item.vx; item.y += item.vy;
+    item.angle = Math.sin(performance.now()/900+item.floatSeed)*0.03;
+
+    const margin = item.w/2+10;
+    if(item.x < margin){ item.x=margin; item.vx*=-0.4; }
+    if(item.x > innerWidth-margin){ item.x=innerWidth-margin; item.vx*=-0.4; }
+  } else {
+    item.angle = (pointer.x - item.x) * 0.0008;
+  }
+
+  gctx.save();
+  gctx.translate(item.x, item.y);
+  gctx.rotate(item.angle);
+
+  const w = item.w, h = item.h;
+  const glow = item.dragging ? 26 : 10;
+  gctx.shadowColor = item.dragging ? 'rgba(251,191,36,0.65)' : 'rgba(34,211,238,0.35)';
+  gctx.shadowBlur = glow;
+
+  roundRect(gctx, -w/2, -h/2, w, h, 18);
+  gctx.fillStyle = item.dragging ? 'rgba(251,191,36,0.16)' : 'rgba(255,255,255,0.09)';
+  gctx.fill();
+  gctx.lineWidth = item.dragging ? 2.5 : 1.5;
+  gctx.strokeStyle = item.dragging ? '#FBBF24' : 'rgba(255,255,255,0.35)';
+  gctx.stroke();
+  gctx.shadowBlur = 0;
+
+  gctx.textAlign='center'; gctx.textBaseline='middle';
+  gctx.fillStyle = '#E7ECF5';
+  gctx.font = `${isMono?'700':'600'} ${isMono?22:15}px ${isMono?"'JetBrains Mono'":"'Space Grotesk'"}`;
+  // wrap long descriptive text
+  wrapText(gctx, item.data.display, 0, 0, w-36, isMono?24:18);
+  gctx.restore();
+}
+
+function wrapText(ctx, text, cx, cy, maxWidth, lineHeight){
+  const words = text.split(' ');
+  let lines = [];
+  let cur = '';
+  words.forEach(word=>{
+    const test = cur ? cur+' '+word : word;
+    if(ctx.measureText(test).width > maxWidth && cur){
+      lines.push(cur); cur = word;
+    } else cur = test;
+  });
+  if(cur) lines.push(cur);
+  if(lines.length===1){
+    ctx.fillText(lines[0], cx, cy);
+  } else {
+    const totalH = (lines.length-1)*lineHeight;
+    lines.forEach((l,i)=> ctx.fillText(l, cx, cy - totalH/2 + i*lineHeight));
+  }
+}
+
+function drawParticles(dt){
+  particles.forEach(p=>{
+    p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= 0.02;
+    gctx.globalAlpha = Math.max(p.life,0);
+    gctx.fillStyle = p.color;
+    gctx.beginPath();
+    gctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+    gctx.fill();
+  });
+  gctx.globalAlpha = 1;
+  particles = particles.filter(p=>p.life>0);
+}
+
+function drawCursor(){
+  if(!pointer.active) return;
+  gctx.save();
+  gctx.beginPath();
+  const r = pointer.pinching ? 13 : 16;
+  gctx.arc(pointer.x, pointer.y, r, 0, Math.PI*2);
+  gctx.fillStyle = pointer.pinching ? 'rgba(251,191,36,0.28)' : 'rgba(34,211,238,0.2)';
+  gctx.fill();
+  gctx.lineWidth = 2.5;
+  gctx.strokeStyle = pointer.pinching ? '#FBBF24' : '#22D3EE';
+  gctx.stroke();
+  gctx.beginPath();
+  gctx.arc(pointer.x, pointer.y, 2.5, 0, Math.PI*2);
+  gctx.fillStyle = pointer.pinching ? '#FBBF24' : '#22D3EE';
+  gctx.fill();
+  gctx.restore();
+}
+
+function binAt(x,y){
+  return bins.find(b => x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h);
+}
+
+function pointInItem(x,y){
+  if(!item) return false;
+  return Math.abs(x-item.x) < item.w/2 && Math.abs(y-item.y) < item.h/2;
+}
+
+function handleDragLogic(){
+  const justPinched = pointer.pinching && !pointer.prevPinching;
+  const justReleased = !pointer.pinching && pointer.prevPinching;
+
+  if(justPinched && item && !item.dragging){
+    if(pointInItem(pointer.x, pointer.y)){
+      item.dragging = true;
+      item.grabDX = pointer.x - item.x;
+      item.grabDY = pointer.y - item.y;
+      item.vx = 0; item.vy = 0;
+    }
+  }
+
+  if(item && item.dragging){
+    item.x = pointer.x - item.grabDX;
+    item.y = pointer.y - item.grabDY;
+  }
+
+  if(justReleased && item && item.dragging){
+    item.dragging = false;
+    const hitBin = binAt(pointer.x, pointer.y) || binAt(item.x, item.y);
+    if(hitBin){
+      evaluateDrop(hitBin);
+    } else {
+      item.vy = -4; item.vx = (Math.random()-0.5)*4;
+    }
+  }
+
+  pointer.prevPinching = pointer.pinching;
+}
+
+function evaluateDrop(bin){
+  const correct = bin.id === item.data.correct;
+  bin.flashUntil = performance.now() + 420;
+  bin.flashColor = correct ? '#34D399' : '#FB7185';
+
+  if(correct){
+    score += 10;
+    correctCount++;
+    spawnParticles(item.x, item.y, CATEGORIES.find(c=>c.id===bin.id).color, 22);
+    showToast('✅', `ถูกต้อง! ${bin.label} +10`, 'good');
+    item = null;
+    document.getElementById('hudScore').textContent = score;
+    roundIndex++;
+    if(roundIndex >= rounds.length){
+      setTimeout(endGame, 650);
+    } else {
+      setTimeout(()=>{ spawnItem(); updatePrompt(); }, 500);
+    }
+  } else {
+    wrongAttempts++;
+    spawnParticles(item.x, item.y, '#FB7185', 14);
+    showToast('❌', 'ยังไม่ถูก ลองหมวดอื่นดูนะ', 'bad');
+    // bounce item back up
+    item.x = innerWidth/2;
+    item.y = Math.max(150, innerHeight*0.32);
+    item.vx = (Math.random()-0.5)*6;
+    item.vy = -6;
+  }
+}
+
+function gameLoop(t){
+  const dt = t - lastTime; lastTime = t;
+  gctx.clearRect(0,0,innerWidth,innerHeight);
+
+  if(gameActive){
+    handleDragLogic();
+    drawBins();
+    drawParticles(dt);
+    drawItem(dt);
+    drawCursor();
+  }
+  requestAnimationFrame(gameLoop);
+}
+requestAnimationFrame(gameLoop);
+
+/* ---------------- Game state machine ---------------- */
+let gameActive = false;
+
+function startPlaythrough(){
+  rounds = shuffle(ROUND_POOL).slice(0,10);
+  roundIndex = 0; score = 0; correctCount = 0; wrongAttempts = 0;
+  document.getElementById('hudScore').textContent = '0';
+  layoutBins();
+  spawnItem();
+  updatePrompt();
+  gameActive = true;
+  document.getElementById('hud').classList.remove('hidden');
+  setTimeout(()=>{
+    document.getElementById('hintBanner').style.opacity = '0';
+  }, 6000);
+}
+
+function endGame(){
+  gameActive = false;
+  item = null;
+  document.getElementById('hud').classList.add('hidden');
+  const total = correctCount + wrongAttempts;
+  const acc = total>0 ? Math.round((correctCount/total)*100) : 100;
+  document.getElementById('endScore').textContent = score;
+  document.getElementById('endAccuracy').textContent = acc + '%';
+  showScreen('screenEnd');
+}
+
+/* ---------------- Screen management ---------------- */
+function showScreen(id){
+  ['screenStart','screenInstructions','screenEnd'].forEach(s=>{
+    document.getElementById(s).classList.toggle('hidden', s!==id);
+  });
+}
+
+document.getElementById('btnEnter').addEventListener('click', ()=>{
+  showScreen('screenInstructions');
+  initCamera();
+});
+
+document.getElementById('btnStartGame').addEventListener('click', ()=>{
+  if(!usingHandTracking) return; // gated: can't start without hand tracking
+  document.querySelectorAll('.screen').forEach(s=>s.classList.add('hidden'));
+  document.getElementById('hintBanner').style.opacity = '1';
+  startPlaythrough();
+});
+
+document.getElementById('btnRetryCam').addEventListener('click', ()=>{
+  initCamera();
+});
+
+document.getElementById('btnReplay').addEventListener('click', ()=>{
+  document.querySelectorAll('.screen').forEach(s=>s.classList.add('hidden'));
+  document.getElementById('hintBanner').style.opacity = '1';
+  startPlaythrough();
+});
+
+document.getElementById('btnHome').addEventListener('click', ()=>{
+  showScreen('screenStart');
+});
+
+resizeCanvases();
+
+/* ---------------- MediaPipe Hands setup ---------------- */
+const videoEl = document.getElementById('cameraFeed');
+let handsModel = null;
+let mpCamera = null;
+let lastHandSeen = 0;
+
+function setCamStatus(state, text){
+  const dot = document.getElementById('camStatusDot');
+  const label = document.getElementById('camStatusText');
+  label.textContent = text;
+  dot.className = 'w-2 h-2 rounded-full ' + (
+    state==='ok' ? 'bg-[var(--green)] pulse-dot' :
+    state==='warn' ? 'bg-[var(--amber)]' :
+    state==='bad' ? 'bg-[var(--rose)]' : 'bg-[var(--ink-dim)]'
+  );
+
+  const startBtn = document.getElementById('btnStartGame');
+  const retryBtn = document.getElementById('btnRetryCam');
+  const errorBox = document.getElementById('camErrorBox');
+
+  if(state==='ok'){
+    startBtn.disabled = false;
+    startBtn.textContent = 'เริ่มเกม!';
+    startBtn.className = 'btn-primary w-full py-4 rounded-2xl text-lg';
+    retryBtn.classList.add('hidden');
+    errorBox.classList.add('hidden');
+  } else if(state==='bad'){
+    startBtn.disabled = true;
+    startBtn.textContent = 'ต้องเชื่อมกล้องก่อนถึงจะเริ่มได้';
+    startBtn.className = 'w-full py-4 rounded-2xl text-lg opacity-40 cursor-not-allowed';
+    startBtn.style.background = 'rgba(255,255,255,0.08)';
+    startBtn.style.color = 'var(--ink-dim)';
+    retryBtn.classList.remove('hidden');
+    errorBox.classList.remove('hidden');
+  } else {
+    startBtn.disabled = true;
+    startBtn.textContent = 'รอกล้องพร้อม...';
+    startBtn.className = 'w-full py-4 rounded-2xl text-lg opacity-40 cursor-not-allowed';
+    startBtn.style.background = 'rgba(255,255,255,0.08)';
+    startBtn.style.color = 'var(--ink-dim)';
+    retryBtn.classList.add('hidden');
+    errorBox.classList.add('hidden');
+  }
+}
+
+function updateModeBadge(){
+  const b = document.getElementById('modeBadge');
+  b.textContent = 'AR HAND MODE';
+  b.style.color = 'var(--green)';
+}
+
+function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+function onHandResults(results){
+  hctx.clearRect(0,0,innerWidth,innerHeight);
+
+  if(!results.multiHandLandmarks || results.multiHandLandmarks.length===0){
+    if(performance.now() - lastHandSeen > 900){
+      pointer.active = false;
+    }
+    return;
+  }
+
+  lastHandSeen = performance.now();
+  const landmarks = results.multiHandLandmarks[0];
+
+  // draw full hand skeleton (mirrored to match video)
+  drawHandSkeleton(landmarks);
+
+  const indexTip = landmarks[8];
+  const thumbTip = landmarks[4];
+
+  // mirror x because video is mirrored
+  const ix = (1 - indexTip.x) * innerWidth;
+  const iy = indexTip.y * innerHeight;
+
+  pointer.x = ix; pointer.y = iy; pointer.active = true; pointer.source='hand';
+
+  const pinchDist = dist(indexTip, thumbTip);
+  pointer.pinching = pinchDist < 0.06;
+
+  if(!usingHandTracking){
+    usingHandTracking = true;
+    updateModeBadge();
+  }
+}
+
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [0,9],[9,10],[10,11],[11,12],
+  [0,13],[13,14],[14,15],[15,16],
+  [0,17],[17,18],[18,19],[19,20],
+  [5,9],[9,13],[13,17]
+];
+
+function drawHandSkeleton(landmarks){
+  hctx.save();
+  hctx.strokeStyle = 'rgba(34,211,238,0.55)';
+  hctx.lineWidth = 2;
+  HAND_CONNECTIONS.forEach(([a,b])=>{
+    const p1 = landmarks[a], p2 = landmarks[b];
+    hctx.beginPath();
+    hctx.moveTo((1-p1.x)*innerWidth, p1.y*innerHeight);
+    hctx.lineTo((1-p2.x)*innerWidth, p2.y*innerHeight);
+    hctx.stroke();
+  });
+  landmarks.forEach((p,i)=>{
+    const x=(1-p.x)*innerWidth, y=p.y*innerHeight;
+    hctx.beginPath();
+    hctx.arc(x,y, i===8?6:3.5, 0, Math.PI*2);
+    hctx.fillStyle = i===8 ? '#FBBF24' : 'rgba(231,236,245,0.85)';
+    hctx.fill();
+  });
+  hctx.restore();
+}
+
+async function initCamera(){
+  setCamStatus('warn','กำลังขอสิทธิ์เข้าถึงกล้อง...');
+  document.getElementById('camErrorBox').classList.add('hidden');
+
+  if(location.protocol === 'file:'){
+    setCamStatus('bad','ไม่สามารถเปิดกล้องได้ (ไฟล์ถูกเปิดแบบ file://)');
+    document.getElementById('camErrorDetail').textContent =
+      'เบราว์เซอร์บล็อกกล้องเสมอเมื่อเปิดไฟล์ HTML โดยตรงแบบนี้ ต้องรันผ่าน local server (เช่น python3 -m http.server) แล้วเข้าผ่าน http://localhost:... เท่านั้น';
+    return;
+  }
+
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    setCamStatus('bad','เบราว์เซอร์นี้ไม่รองรับกล้อง');
+    document.getElementById('camErrorDetail').textContent =
+      'ลองเปลี่ยนไปใช้ Chrome, Edge หรือ Safari เวอร์ชันล่าสุด';
+    return;
+  }
+
+  // Libraries load from CDN as classic <script> tags; on a slow connection they
+  // may not be attached to window yet even after DOMContentLoaded. Wait briefly.
+  let waited = 0;
+  while((typeof Hands === 'undefined' || typeof Camera === 'undefined') && waited < 4000){
+    await new Promise(r => setTimeout(r, 200));
+    waited += 200;
+  }
+
+  if(typeof Hands === 'undefined' || typeof Camera === 'undefined'){
+    setCamStatus('bad','โหลดไลบรารีตรวจจับมือไม่สำเร็จ');
+    document.getElementById('camErrorDetail').textContent =
+      'โหลดจาก cdn.jsdelivr.net ไม่สำเร็จ — ตรวจสอบอินเทอร์เน็ต หรือลองปิด Ad-blocker/VPN แล้วกด "ลองเชื่อมกล้องอีกครั้ง"';
+    return;
+  }
+
+  try{
+    handsModel = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+    handsModel.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.5
+    });
+    handsModel.onResults(onHandResults);
+
+    mpCamera = new Camera(videoEl, {
+      onFrame: async () => {
+        try{ await handsModel.send({image: videoEl}); }catch(e){ /* ignore transient frame errs */ }
+      },
+      width: 640,
+      height: 480
+    });
+
+    await mpCamera.start();
+    videoEl.classList.remove('hidden');
+    document.getElementById('fallbackBg').style.opacity = '0.0';
+    usingHandTracking = true;
+    updateModeBadge();
+    setCamStatus('ok','พบกล้องแล้ว — ยกมือขึ้นให้เห็นในเฟรม');
+  } catch(err){
+    console.warn('Camera/hand tracking unavailable:', err);
+    let detail = 'ไม่พบกล้อง หรือถูกปฏิเสธสิทธิ์เข้าถึง';
+    if(err && err.name === 'NotAllowedError'){
+      detail = 'คุณปฏิเสธสิทธิ์เข้าถึงกล้อง — กดไอคอนกล้อง/แม่กุญแจที่แถบ URL แล้วอนุญาตใหม่ แล้วกด "ลองเชื่อมกล้องอีกครั้ง"';
+    } else if(err && err.name === 'NotFoundError'){
+      detail = 'ไม่พบอุปกรณ์กล้องในเครื่อง — ตรวจสอบว่าเสียบ/เปิดกล้องอยู่';
+    } else if(err && err.name === 'NotReadableError'){
+      detail = 'กล้องถูกใช้งานโดยแอปอื่นอยู่ — ปิดแอปอื่นที่ใช้กล้อง (เช่น Zoom, Teams) แล้วลองใหม่';
+    }
+    setCamStatus('bad','เปิดกล้องไม่สำเร็จ');
+    document.getElementById('camErrorDetail').textContent = detail;
+  }
+}
+
+updateModeBadge();
+</script>
+</body>
+</html>
